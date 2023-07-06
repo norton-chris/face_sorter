@@ -43,21 +43,11 @@ def image_noise(image):
 
 def image_blur(image, kernel_size=(5,5)):
     return cv2.GaussianBlur(image, kernel_size, 0)
-def save_progress_end():
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    progress_file = f'progress_{timestamp}.csv'
-
-    with open(progress_file, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(scanned_directories)
-        writer.writerow(scanned_files)
-    print("Progress saved in", progress_file)
 
 transformations = [image_flip, image_rotate, image_noise, image_blur]
 
 # Create a new instance of the GUI
 root = tk.Tk()
-root.protocol("WM_DELETE_WINDOW", save_progress_end)
 gui = FaceRecognizerGUI(root)
 
 # The path of the CSV file to store the progress
@@ -149,17 +139,71 @@ def is_image_file(file):
 
 def process_file(file_path, output_dir):
     # load image
-    print("Reading image...", end="", flush=True)
+    gui.deep_scan.set(False)
     image = face_recognition.load_image_file(file_path)
     image_cv = cv2.imread(file_path)
-    print("\rImage read.")
     gui.show_image(image_cv)
+    time.sleep(2)
     face_locations = face_recognition.face_locations(image)
     face_encodings = face_recognition.face_encodings(image_cv, face_locations)
-    print("found", len(face_locations), "faces")
+
+
+    if len(face_locations) == 0:
+        print("No faces found, press deep scan if there are faces in the image")
+        # Wait for 3 seconds for a deep_scan button press
+        wait_for = 3
+        for _ in range(3):
+            if gui.deep_scan.get():
+                break
+            print("Press in", wait_for, flush=True)
+            wait_for -= 1
+            time.sleep(1)
+
+        if gui.deep_scan.get():
+            number_of_times_to_upsample = 0
+            face_detected = False
+            max_iterations = len(transformations)
+            iteration = 0
+
+            while not face_detected and iteration < max_iterations:
+                # Apply random transformations
+                random.shuffle(transformations)
+                for transformation in transformations[:iteration + 1]:
+                    print("Trying", transformation, "augmentation")
+                    image_cv_transformed = transformation(image_cv)
+                    gui.show_image(image_cv_transformed)
+
+                    # Try face recognition on the transformed image
+                    face_locations = face_recognition.face_locations(image_cv_transformed,
+                                                                     number_of_times_to_upsample=number_of_times_to_upsample)
+                    if face_locations:  # If a face is found, break the loop
+                        face_detected = True
+                        print("Face found with", transformation)
+                        wait_for = 3
+                        for _ in range(3):
+                            if gui.deep_scan.get():
+                                iteration = 0 # scan again
+                                break
+                            print("Press in", wait_for, flush=True)
+                            wait_for -= 1
+                            time.sleep(1)
+                        break
+                iteration += 1
+                if number_of_times_to_upsample < 4:
+                    number_of_times_to_upsample += 1
+
+            # Proceed if a face has been detected
+            if face_detected:
+                face_encodings = face_recognition.face_encodings(image_cv, face_locations)
+                for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+                    # Draw a box around the face
+                    cv2.rectangle(image_cv, (left, top), (right, bottom), (0, 0, 255), 2)
+                    # Rest of your face recognition code...
+            else:
+                print("No faces detected even after transformations")
 
     face = False
-    if len(face_locations) == 0:
+    if face_locations is None:
         return face
     for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
         face = True
@@ -195,18 +239,18 @@ def process_file(file_path, output_dir):
             # If autolabeling is on, confirm the best match without waiting for manual confirmation
             name = known_face_names[best_match_index]
             print("Face automatically confirmed", name)
-            cv2.putText(image_cv, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 2, (36, 255, 12), 2)
+            cv2.putText(image_cv, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
             gui.show_image(image_cv)
-            time.sleep(0.5)
+            time.sleep(0.1)
         elif True in matches:
             first_match_index = matches.index(True)
             name = known_face_names[first_match_index]
             print("Face recognized:", name)
-            cv2.putText(image_cv, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 2, (36, 255, 12), 2)
+            cv2.putText(image_cv, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
             #cv2.imshow('Face', image_cv)
             # Display the image in the GUI
             gui.show_image(image_cv)
-            while True and not gui.run_autolabel.get():
+            while True:
                 # Sleep for a small amount of time to reduce CPU usage
                 time.sleep(0.1)
                 #k = cv2.waitKey(0)
@@ -241,17 +285,30 @@ def process_file(file_path, output_dir):
                         pass
                     name = new_name
                     break
+                # elif gui.key_pressed == 'f':
+                #     cv2.destroyAllWindows()
+                #     cv2.imshow('Face', cv2.resize(image_cv, (1920, 1080)))
+                # elif gui.key_pressed == 'r':
+                #     cv2.destroyAllWindows()
+                #     cv2.imshow('Face', cv2.resize(image_cv, (640, 480)))
         else:
             #cv2.imshow('Unrecognized Face', image_cv)
             # Display the image in the GUI
             print("Face unknown")
-            cv2.putText(image_cv, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 2, (36, 255, 12), 2)
+            cv2.putText(image_cv, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
             gui.show_image(image_cv)
-            while True:
+            time.sleep(0.5)
+            while True and not gui.run_autolabel.get():
                 if gui.key_pressed.get() == 's':
                     name = "Unknown"
                     print("Keeping as Unknown")
                     break
+                # elif gui.key_pressed == 'r':
+                #     image_cv = cv2.resize(image_cv, (640, 480))
+                #     cv2.imshow('Unrecognized Face', image_cv)
+                # elif gui.key_pressed == 'f':
+                #     image_cv = cv2.resize(image_cv, (1920, 1080))
+                #     cv2.imshow('Unrecognized Face', image_cv)
                 elif gui.key_pressed.get() == 'x':
                     cv2.destroyAllWindows()
                     name = gui.name_entry.get()
@@ -290,7 +347,7 @@ def process_file(file_path, output_dir):
         # Copy the file
         shutil.copy2(file_path, new_file_path)
         print("file copied from:", file_path, "to", new_file_path)
-    return face
+        return face
 
     # Save face encodings and names
     with open('face_encodings.pkl', 'wb') as f:
@@ -306,23 +363,14 @@ def process_file(file_path, output_dir):
 def run_script():
     root_dir = "/Volumes/RAID_Drive/Family_Photos/"  # input("Enter the root directory: ")
     output_dir = "/Users/chris/Documents/faces"
-    try:
-        process_directory(root_dir, output_dir)
-        root.quit()
-    except KeyboardInterrupt or exit(1):
-        print("Interrupted. Saving progress...")
-        save_progress_end()
+    process_directory(root_dir, output_dir)
+    root.quit()
 
-try:
-    # Use threading to run your existing script in a separate thread
-    script_thread = threading.Thread(target=run_script, args=())
-    script_thread.start()
+# Use threading to run your existing script in a separate thread
+script_thread = threading.Thread(target=run_script, args=())
+script_thread.start()
 
-    # Start the Tkinter event loop in the main thread
-    root.mainloop()
-except KeyboardInterrupt or exit(1):
-    print("Interrupted. Saving progress...")
-    save_progress_end()
-
+# Start the Tkinter event loop in the main thread
+root.mainloop()
 
 
